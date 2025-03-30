@@ -2,8 +2,9 @@ local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 
--- File path for logging (adjust if your executor uses a specific directory)
+-- File paths for logging and server data
 local LOG_FILE = "bounty_log.txt"
+local SERVER_DATA_FILE = "server_data.txt"
 
 -- Custom logging function to append to file
 local function logToFile(message)
@@ -22,20 +23,104 @@ local scriptToRun = [[
     loadstring(game:HttpGet("https://raw.githubusercontent.com/mrricky22/testdijskfb/refs/heads/main/new.lua"))()
 ]]
 
--- Function to join a new server - UPDATED to fetch and pick a random server
-local function joinNewServer(placeId)
-    logToFile("Finding a random server to join...")
-    wait(5) -- Reduced wait time since we'll have additional processing
+-- Function to save server data to file
+local function saveServerData(servers, currentIndex)
+    pcall(function()
+        local dataToSave = {
+            servers = servers,
+            currentIndex = currentIndex,
+            timestamp = os.time()
+        }
+        writefile(SERVER_DATA_FILE, HttpService:JSONEncode(dataToSave))
+        logToFile("Saved server data with " .. #servers .. " servers, current index: " .. currentIndex)
+    end)
+end
+
+-- Function to load server data from file
+local function loadServerData()
+    local success, data = pcall(function()
+        if isfile(SERVER_DATA_FILE) then
+            local content = readfile(SERVER_DATA_FILE)
+            return HttpService:JSONDecode(content)
+        end
+        return nil
+    end)
     
-    local serversSuccess, servers = pcall(function()
+    if success and data then
+        logToFile("Loaded server data with " .. #data.servers .. " servers, current index: " .. data.currentIndex)
+        return data
+    end
+    return nil
+end
+
+-- Function to fetch a new list of servers
+local function fetchServerList(placeId)
+    logToFile("Fetching a new list of servers...")
+    
+    local success, servers = pcall(function()
         local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
         local response = game:HttpGet(url)
         local data = HttpService:JSONDecode(response)
         return data.data
     end)
     
-    if not serversSuccess or not servers or #servers == 0 then
-        logToFile("Server fetch failed or no servers available. Trying default teleport.")
+    if not success or not servers or #servers == 0 then
+        logToFile("Failed to fetch servers: " .. tostring(servers))
+        return nil
+    end
+    
+    logToFile("Successfully fetched " .. #servers .. " servers")
+    return servers
+end
+
+-- Function to join the next server from the list
+local function joinNextServer(placeId, serverData)
+    local currentJobId = game.JobId
+    local servers = serverData.servers
+    local currentIndex = serverData.currentIndex
+    
+    -- Check if we need to refresh the server list
+    if currentIndex > #servers then
+        logToFile("Reached the end of the server list. Fetching new servers...")
+        local newServers = fetchServerList(placeId)
+        if not newServers or #newServers == 0 then
+            logToFile("Failed to get new servers. Using default teleport.")
+            pcall(function() 
+                queue_on_teleport(scriptToRun)
+                TeleportService:Teleport(placeId, Players.LocalPlayer)
+            end)
+            return
+        end
+        
+        servers = newServers
+        currentIndex = 1
+        saveServerData(servers, currentIndex)
+    end
+    
+    -- Find the next valid server to join
+    local targetServer = nil
+    local startIndex = currentIndex
+    local checked = 0
+    
+    repeat
+        local server = servers[currentIndex]
+        if server and server.id ~= currentJobId and server.playing < server.maxPlayers then
+            targetServer = server
+            break
+        end
+        
+        currentIndex = currentIndex + 1
+        if currentIndex > #servers then currentIndex = 1 end
+        checked = checked + 1
+    until targetServer or checked >= #servers
+    
+    -- Update the index for next time
+    currentIndex = currentIndex + 1
+    saveServerData(servers, currentIndex)
+    
+    -- If no suitable server found, use default teleport
+    if not targetServer then
+        logToFile("No suitable servers found after checking all options. Using default teleport.")
         pcall(function() 
             queue_on_teleport(scriptToRun)
             TeleportService:Teleport(placeId, Players.LocalPlayer)
@@ -43,38 +128,13 @@ local function joinNewServer(placeId)
         return
     end
     
-    -- Find a suitable server - RANDOMLY
-    local currentJobId = game.JobId
-    local suitableServers = {}
+    -- Teleport to the selected server
+    logToFile("Joining server with JobId: " .. targetServer.id .. " (Players: " .. targetServer.playing .. "/" .. targetServer.maxPlayers .. ")")
     
-    -- Collect all suitable servers first
-    for _, server in pairs(servers) do
-        if server.id ~= currentJobId and server.playing < server.maxPlayers then
-            table.insert(suitableServers, server)
-        end
-    end
-    
-    -- Pick a random server from suitable ones
-    if #suitableServers > 0 then
-        -- Seed random with the current time to ensure different results
-        math.randomseed(tick())
-        local randomIndex = math.random(1, #suitableServers)
-        local targetServer = suitableServers[randomIndex]
-        
-        logToFile("Selected random server " .. randomIndex .. " of " .. #suitableServers .. " available servers")
-        logToFile("Joining server with JobId: " .. targetServer.id .. " (Players: " .. targetServer.playing .. "/" .. targetServer.maxPlayers .. ")")
-        
-        pcall(function()
-            queue_on_teleport(scriptToRun)
-            TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, Players.LocalPlayer)
-        end)
-    else
-        logToFile("No suitable servers found. Trying default teleport.")
-        pcall(function() 
-            queue_on_teleport(scriptToRun)
-            TeleportService:Teleport(placeId, Players.LocalPlayer)
-        end)
-    end
+    pcall(function()
+        queue_on_teleport(scriptToRun)
+        TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, Players.LocalPlayer)
+    end)
 end
 
 -- Main function to check bounties and hop servers
@@ -143,13 +203,43 @@ local function main()
         
         if not mostWantedSuccess then
             logToFile("Error accessing MostWanted board: " .. tostring(mostWantedResult))
-            joinNewServer(placeId)
+            
+            -- Get or initialize server data
+            local serverData = loadServerData()
+            if not serverData then
+                local servers = fetchServerList(placeId)
+                if not servers then
+                    logToFile("Failed to fetch initial servers. Using default teleport.")
+                    queue_on_teleport(scriptToRun)
+                    TeleportService:Teleport(placeId, Players.LocalPlayer)
+                    return
+                end
+                serverData = {servers = servers, currentIndex = 1, timestamp = os.time()}
+                saveServerData(servers, 1)
+            end
+            
+            joinNextServer(placeId, serverData)
             return
         end
         
         if not mostWantedResult then
             logToFile("MostWanted board is nil despite successful pcall. Joining new server.")
-            joinNewServer(placeId)
+            
+            -- Get or initialize server data
+            local serverData = loadServerData()
+            if not serverData then
+                local servers = fetchServerList(placeId)
+                if not servers then
+                    logToFile("Failed to fetch initial servers. Using default teleport.")
+                    queue_on_teleport(scriptToRun)
+                    TeleportService:Teleport(placeId, Players.LocalPlayer)
+                    return
+                end
+                serverData = {servers = servers, currentIndex = 1, timestamp = os.time()}
+                saveServerData(servers, 1)
+            end
+            
+            joinNextServer(placeId, serverData)
             return
         end
         
@@ -217,16 +307,45 @@ local function main()
             return
         end
         
+        -- Get or initialize server data if we need to hop
+        local serverData = loadServerData()
+        if not serverData then
+            local servers = fetchServerList(placeId)
+            if not servers then
+                logToFile("Failed to fetch initial servers. Using default teleport.")
+                queue_on_teleport(scriptToRun)
+                TeleportService:Teleport(placeId, Players.LocalPlayer)
+                return
+            end
+            serverData = {servers = servers, currentIndex = 1, timestamp = os.time()}
+            saveServerData(servers, 1)
+        end
+        
         -- Only join new server if no high bounties found
-        logToFile("No high bounties found. Hopping to a new server...")
-        joinNewServer(placeId)
+        logToFile("No high bounties found. Hopping to the next server...")
+        joinNextServer(placeId, serverData)
     end)
     
     if not success then
         logToFile("Main function error: " .. tostring(errorMsg))
         pcall(function()
             local placeId = game.PlaceId
-            joinNewServer(placeId)
+            
+            -- Get or initialize server data
+            local serverData = loadServerData()
+            if not serverData then
+                local servers = fetchServerList(placeId)
+                if not servers then
+                    logToFile("Failed to fetch initial servers after error. Using default teleport.")
+                    queue_on_teleport(scriptToRun)
+                    TeleportService:Teleport(placeId, Players.LocalPlayer)
+                    return
+                end
+                serverData = {servers = servers, currentIndex = 1, timestamp = os.time()}
+                saveServerData(servers, 1)
+            end
+            
+            joinNextServer(placeId, serverData)
         end)
     end
 end
