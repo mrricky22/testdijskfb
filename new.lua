@@ -19,7 +19,7 @@ local scriptToRun = [[
     game.Loaded:Wait()
     
     -- Once the game is loaded, run the external script
-    wait(1)
+    wait(2)
     loadstring(game:HttpGet("https://raw.githubusercontent.com/mrricky22/testdijskfb/refs/heads/main/new.lua"))()
 ]]
 
