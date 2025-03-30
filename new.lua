@@ -104,7 +104,7 @@ local function joinNextServer(placeId, serverData)
     
     repeat
         local server = servers[currentIndex]
-        if server and server.id ~= currentJobId and server.playing < server.maxPlayers then
+        if server and server.id ~= currentJobId and server.playing < server.maxPlayers and server.playing < 27 then
             targetServer = server
             break
         end
