@@ -58,7 +58,7 @@ local function fetchServerList(placeId)
     logToFile("Fetching a new list of servers...")
     
     local success, servers = pcall(function()
-        local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
+        local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Desc&limit=100"
         local response = game:HttpGet(url)
         local data = HttpService:JSONDecode(response)
         return data.data
@@ -278,7 +278,7 @@ local function main()
                             logToFile("Player: " .. playerName .. " | Bounty: " .. bountyText)
                             
                             -- Track if we found any high bounties
-                            if amount and amount > 10000 then
+                            if amount and amount > 15000 then
                                 logToFile("*** HIGH BOUNTY FOUND *** Player=" .. playerName .. " | Bounty=" .. bountyText)
                                 foundHighBounty = true
                                 -- Note: Not returning early, continuing to check all bounties
