@@ -3,7 +3,9 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 
 -- Define the script to queue as a separate string
-local scriptToRun = loadstring(game:HttpGet(""))()
+local scriptToRun = [[
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/mrricky22/testdijskfb/refs/heads/main/new.lua"))()
+]]
 -- Function to fetch server list using game:HttpGet
 local function fetchServerList(placeId)
     local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
