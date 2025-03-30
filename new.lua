@@ -75,6 +75,7 @@ end
 
 -- Function to join the next server from the list
 local function joinNextServer(placeId, serverData)
+    wait(2)
     local currentJobId = game.JobId
     local servers = serverData.servers
     local currentIndex = serverData.currentIndex
