@@ -360,5 +360,4 @@ end)
 -- Fallback in case the entire script fails
 pcall(function()
     logToFile("Script execution completed or failed. Ensuring queue_on_teleport is set.")
-    queue_on_teleport(scriptToRun)
 end)
