@@ -73,12 +73,30 @@ local function fetchServerList(placeId)
     return servers
 end
 
--- Function to join the next server from the list
+-- Function to attempt teleporting to a server with error handling
+local function attemptTeleport(placeId, serverId)
+    local teleportSuccess, teleportError = pcall(function()
+        queue_on_teleport(scriptToRun)
+        TeleportService:TeleportToPlaceInstance(placeId, serverId, Players.LocalPlayer)
+    end)
+    
+    if not teleportSuccess then
+        logToFile("Teleport failed: " .. tostring(teleportError))
+        return false
+    end
+    
+    return true
+end
+
+-- Function to join the next server from the list with better error handling
 local function joinNextServer(placeId, serverData)
     wait(3)
     local currentJobId = game.JobId
     local servers = serverData.servers
     local currentIndex = serverData.currentIndex
+    
+    -- Track servers we've tried to join
+    local triedServers = {}
     
     -- Check if we need to refresh the server list
     if currentIndex > #servers then
@@ -98,45 +116,85 @@ local function joinNextServer(placeId, serverData)
         saveServerData(servers, currentIndex)
     end
     
-    -- Find the next valid server to join
-    local targetServer = nil
-    local startIndex = currentIndex
-    local checked = 0
+    -- Try to join servers until we succeed or exhaust the list
+    local maxAttempts = #servers
+    local attempts = 0
     
-    repeat
+    while attempts < maxAttempts do
+        -- Get the next server to try
         local server = servers[currentIndex]
-        if server and server.id ~= currentJobId and server.playing < server.maxPlayers and server.playing < 27 then
-            targetServer = server
-            break
+        
+        -- Update the index for next attempt
+        local nextIndex = currentIndex + 1
+        if nextIndex > #servers then nextIndex = 1 end
+        
+        -- Validate the server
+        if server and server.id ~= currentJobId and server.playing < server.maxPlayers and server.playing < 27 and not triedServers[server.id] then
+            logToFile("Attempting to join server with JobId: " .. server.id .. " (Players: " .. server.playing .. "/" .. server.maxPlayers .. ")")
+            
+            -- Mark this server as tried
+            triedServers[server.id] = true
+            
+            -- Try to teleport
+            local success = attemptTeleport(placeId, server.id)
+            
+            if success then
+                -- Save the next index in case teleport still fails after success
+                saveServerData(servers, nextIndex)
+                wait(5) -- Give time for teleport to happen
+                
+                -- If we're still here, teleport might have silently failed
+                logToFile("Teleport didn't complete after 5 seconds, trying next server")
+            end
         end
         
-        currentIndex = currentIndex + 1
-        if currentIndex > #servers then currentIndex = 1 end
-        checked = checked + 1
-    until targetServer or checked >= #servers
-    
-    -- Update the index for next time
-    currentIndex = currentIndex + 1
-    saveServerData(servers, currentIndex)
-    
-    -- If no suitable server found, use default teleport
-    if not targetServer then
-        logToFile("No suitable servers found after checking all options. Using default teleport.")
-        pcall(function() 
-            queue_on_teleport(scriptToRun)
-            TeleportService:Teleport(placeId, Players.LocalPlayer)
-        end)
-        return
+        -- Move to the next server
+        currentIndex = nextIndex
+        attempts = attempts + 1
+        
+        -- Small wait between attempts
+        wait(1)
     end
     
-    -- Teleport to the selected server
-    logToFile("Joining server with JobId: " .. targetServer.id .. " (Players: " .. targetServer.playing .. "/" .. targetServer.maxPlayers .. ")")
-    
-    pcall(function()
+    -- If we get here, we've exhausted our options
+    logToFile("Failed to join any server after " .. attempts .. " attempts. Using default teleport.")
+    pcall(function() 
         queue_on_teleport(scriptToRun)
-        TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, Players.LocalPlayer)
+        TeleportService:Teleport(placeId, Players.LocalPlayer)
     end)
 end
+
+-- Event handler for teleport failures
+TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    if player == Players.LocalPlayer then
+        logToFile("Teleport failed: " .. teleportResult.Name .. " - " .. tostring(errorMessage))
+        
+        -- Load the latest server data
+        local serverData = loadServerData()
+        if not serverData then
+            local placeId = game.PlaceId
+            local servers = fetchServerList(placeId)
+            if not servers then
+                logToFile("Failed to fetch servers after teleport error. Using default teleport.")
+                queue_on_teleport(scriptToRun)
+                TeleportService:Teleport(placeId, Players.LocalPlayer)
+                return
+            end
+            serverData = {servers = servers, currentIndex = 1, timestamp = os.time()}
+        else
+            -- Increment the index to try the next server
+            serverData.currentIndex = serverData.currentIndex + 1
+            if serverData.currentIndex > #serverData.servers then
+                serverData.currentIndex = 1
+            end
+        end
+        
+        -- Save updated index and try again
+        saveServerData(serverData.servers, serverData.currentIndex)
+        wait(2) -- Brief delay before trying again
+        joinNextServer(game.PlaceId, serverData)
+    end
+end)
 
 -- Main function to check bounties and hop servers
 local function main()
